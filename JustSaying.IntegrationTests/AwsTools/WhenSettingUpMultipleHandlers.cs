@@ -1,16 +1,18 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Amazon;
 using JustBehave;
 using JustSaying.AwsTools.QueueCreation;
 using JustSaying.Messaging.MessageHandling;
 using Microsoft.Extensions.Logging;
-using NUnit.Framework;
+using Shouldly;
+using Xunit;
 
-namespace JustSaying.AwsTools.IntegrationTests
+namespace JustSaying.IntegrationTests.AwsTools
 {
-    [TestFixture]
-    public class WhenSettingUpMultipleHandlers : BehaviourTest<IHaveFulfilledSubscriptionRequirements>
+    [Collection(GlobalSetup.CollectionName)]
+    public class WhenSettingUpMultipleHandlers : XBehaviourTest<IHaveFulfilledSubscriptionRequirements>
     {
         public class Order : Models.Message
         {
@@ -45,7 +47,6 @@ namespace JustSaying.AwsTools.IntegrationTests
         IHaveFulfilledSubscriptionRequirements bus;
         private string topicName;
         private string queueName;
-
         protected override void Given()
         { }
 
@@ -57,7 +58,7 @@ namespace JustSaying.AwsTools.IntegrationTests
 
             var baseQueueName = "CustomerOrders_";
             topicName = uniqueTopicAndQueueNames.GetTopicName(string.Empty, typeof(Order).Name);
-            queueName = uniqueTopicAndQueueNames.GetQueueName(new SqsReadConfiguration(SubscriptionType.ToTopic) {BaseQueueName = baseQueueName }, typeof(Order).Name);
+            queueName = uniqueTopicAndQueueNames.GetQueueName(new SqsReadConfiguration(SubscriptionType.ToTopic) { BaseQueueName = baseQueueName }, typeof(Order).Name);
 
             bus = CreateMeABus.WithLogging(new LoggerFactory())
                 .InRegion(RegionEndpoint.EUWest1.SystemName)
@@ -70,7 +71,8 @@ namespace JustSaying.AwsTools.IntegrationTests
             bus.StartListening();
             return bus;
         }
-        public override void PostAssertTeardown()
+
+        protected override void PostAssertTeardown()
         {
             SystemUnderTest.StopListening();
             base.PostAssertTeardown();
@@ -80,25 +82,20 @@ namespace JustSaying.AwsTools.IntegrationTests
         {
         }
 
-        [Test]
-        public void CreateTopicCalledOnce()
+        [Fact]
+        public void CreateTopicCalled()
         {
-            AssertHasCounterSetToOne("CreateTopic", topicName);
+            proxyAwsClientFactory.Counters["CreateTopic"][topicName].Count.ShouldBeGreaterThanOrEqualTo(1);
         }
 
-        [Test]
-        public void FindTopicCalledOnce()
+        [Fact]
+        public void GetQueueAttributesCalledOnce()
         {
-            AssertHasCounterSetToOne("FindTopic", topicName);
+            proxyAwsClientFactory.Counters["GetQueueAttributes"].First(x => x.Key.EndsWith(queueName)).Value.Count
+                .ShouldBe(1);
         }
 
-        [Test]
-        public void ListQueuesCalledOnce()
-        {
-            AssertHasCounterSetToOne("ListQueues", queueName);
-        }
-
-        [Test]
+        [Fact]
         public void CreateQueueCalledOnce()
         {
             AssertHasCounterSetToOne("CreateQueue", queueName);
@@ -108,9 +105,9 @@ namespace JustSaying.AwsTools.IntegrationTests
         {
             var counters = proxyAwsClientFactory.Counters;
 
-            Assert.That(counters.ContainsKey(counter), Is.True, "no counter: " + counter);
-            Assert.That(counters[counter].ContainsKey(testQueueName), Is.True, "no queueName: " + testQueueName);
-            Assert.That(counters[counter][testQueueName].Count, Is.EqualTo(1), "Wrong count");
+            counters.ShouldContainKey(counter, $"no counter: {counter}");
+            counters[counter].ShouldContainKey(testQueueName, $"no queueName: {testQueueName}");
+            counters[counter][testQueueName].Count.ShouldBe(1, "Wrong count");
         }
     }
 }

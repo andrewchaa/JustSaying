@@ -1,9 +1,8 @@
-﻿using System;
-using System.Linq;
+using System;
 using System.Threading.Tasks;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
-using Amazon.SQS;
+using JustSaying.AwsTools.QueueCreation;
 using JustSaying.Messaging;
 using JustSaying.Messaging.MessageSerialisation;
 using Microsoft.Extensions.Logging;
@@ -14,8 +13,9 @@ namespace JustSaying.AwsTools.MessageHandling
     public abstract class SnsTopicBase : IMessagePublisher
     {
         private readonly IMessageSerialisationRegister _serialisationRegister; // ToDo: Grrr...why is this here even. GET OUT!
+        private readonly SnsWriteConfiguration _snsWriteConfiguration;
         public string Arn { get; protected set; }
-        public IAmazonSimpleNotificationService Client { get; protected set; }
+        protected IAmazonSimpleNotificationService Client { get; set; }
         private readonly ILogger _eventLog;
         private readonly ILogger _log;
 
@@ -26,24 +26,21 @@ namespace JustSaying.AwsTools.MessageHandling
             _eventLog = loggerFactory.CreateLogger("EventLog");
         }
 
-        public abstract Task<bool> ExistsAsync();
-
-        public bool Exists()
+        protected SnsTopicBase(IMessageSerialisationRegister serialisationRegister, ILoggerFactory loggerFactory, SnsWriteConfiguration snsWriteConfiguration)
         {
-            return ExistsAsync()
-                .GetAwaiter().GetResult();
+            _serialisationRegister = serialisationRegister;
+            _log = loggerFactory.CreateLogger("JustSaying");
+            _eventLog = loggerFactory.CreateLogger("EventLog");
+            _snsWriteConfiguration = snsWriteConfiguration;
         }
 
-        public async Task<bool> IsSubscribedAsync(SqsQueueBase queue)
-        {
-            var result = await Client.ListSubscriptionsByTopicAsync(new ListSubscriptionsByTopicRequest(Arn));
+        protected abstract Task<bool> ExistsAsync();
 
-            return result.Subscriptions.Any(x => !string.IsNullOrEmpty(x.SubscriptionArn) && x.Endpoint == queue.Arn);
-        }
+        public bool Exists() => ExistsAsync().GetAwaiter().GetResult();
 
-        public async Task<bool> SubscribeAsync(IAmazonSQS amazonSqsClient, SqsQueueBase queue)
+        public async Task<bool> SubscribeAsync(SqsQueueBase queue)
         {
-            var subscriptionResponse = await Client.SubscribeAsync(Arn, "sqs", queue.Arn);
+            var subscriptionResponse = await Client.SubscribeAsync(Arn, "sqs", queue.Arn).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(subscriptionResponse?.SubscriptionArn))
             {
@@ -66,9 +63,10 @@ namespace JustSaying.AwsTools.MessageHandling
             }
             catch (Exception ex)
             {
-                throw new PublishException(
-                    $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
-                    ex);
+                if (!ClientExceptionHandler(ex))
+                    throw new PublishException(
+                        $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
+                        ex);
             }
         }
 #endif
@@ -79,16 +77,20 @@ namespace JustSaying.AwsTools.MessageHandling
 
             try
             {
-                await Client.PublishAsync(request);
+                await Client.PublishAsync(request).ConfigureAwait(false);
+
                 _eventLog.LogInformation($"Published message: '{request.Subject}' with content {request.Message}");
             }
             catch (Exception ex)
             {
-                throw new PublishException(
-                    $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
-                    ex);
+                if (!ClientExceptionHandler(ex))
+                    throw new PublishException(
+                        $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
+                        ex);
             }
         }
+
+        private bool ClientExceptionHandler(Exception ex) => _snsWriteConfiguration?.HandleException?.Invoke(ex) ?? false;
 
         private PublishRequest BuildPublishRequest(Message message)
         {
@@ -101,6 +103,5 @@ namespace JustSaying.AwsTools.MessageHandling
                 Message = messageToSend
             };
         }
-
     }
 }

@@ -23,18 +23,30 @@ namespace JustSaying.AwsTools.MessageHandling
 
         public override async Task<bool> ExistsAsync()
         {
-            var result = await Client.ListQueuesAsync(new ListQueuesRequest{ QueueNamePrefix = QueueName });
-
+            GetQueueUrlResponse result;
             _log.LogInformation($"Checking if queue '{QueueName}' exists");
-            Url = result?.QueueUrls?.SingleOrDefault(x => Matches(x, QueueName));
-
-            if (Url != null)
+            if (string.IsNullOrWhiteSpace(QueueName))
             {
-                await SetQueuePropertiesAsync();
-                return true;
+                return false;
             }
 
-            return false;
+            try
+            {
+                result = await Client.GetQueueUrlAsync(QueueName).ConfigureAwait(false);
+            }
+            catch (QueueDoesNotExistException)
+            {
+                return false;
+            }
+
+            if (result?.QueueUrl == null)
+            {
+                return false;
+            }
+            Url = result.QueueUrl;
+
+            await SetQueuePropertiesAsync().ConfigureAwait(false);
+            return true;
         }
 
         private static bool Matches(string queueUrl, string queueName)
@@ -51,13 +63,13 @@ namespace JustSaying.AwsTools.MessageHandling
         {
             try
             {
-                var queueResponse = await Client.CreateQueueAsync(QueueName);
+                var queueResponse = await Client.CreateQueueAsync(QueueName).ConfigureAwait(false);
 
                 if (!string.IsNullOrWhiteSpace(queueResponse?.QueueUrl))
                 {
                     Url = queueResponse.QueueUrl;
-                    await Client.SetQueueAttributesAsync(queueResponse.QueueUrl, GetCreateQueueAttributes(queueConfig));
-                    await SetQueuePropertiesAsync();
+                    await Client.SetQueueAttributesAsync(queueResponse.QueueUrl, GetCreateQueueAttributes(queueConfig)).ConfigureAwait(false);
+                    await SetQueuePropertiesAsync().ConfigureAwait(false);
 
                     _log.LogInformation($"Created Queue: {QueueName} on Arn: {Arn}");
                     return true;
@@ -69,8 +81,8 @@ namespace JustSaying.AwsTools.MessageHandling
                 {
                     // Ensure we wait for queue delete timeout to expire.
                     _log.LogInformation($"Waiting to create Queue due to AWS time restriction - Queue: {QueueName}, AttemptCount: {attempt + 1}");
-                    await Task.Delay(60000);
-                    await CreateAsync(queueConfig, attempt + 1);
+                    await Task.Delay(60000).ConfigureAwait(false);
+                    await CreateAsync(queueConfig, attempt + 1).ConfigureAwait(false);
                 }
                 else
                 {

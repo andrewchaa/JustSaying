@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using Amazon;
+using Amazon.SimpleNotificationService.Model;
 using JustSaying.AwsTools;
 using JustSaying.AwsTools.MessageHandling;
 using JustSaying.AwsTools.QueueCreation;
@@ -42,7 +43,7 @@ namespace JustSaying
             _amazonQueueCreator = queueCreator;
             _awsClientFactoryProxy = awsClientFactoryProxy;
         }
-        
+
         private static string GetMessageTypeName<T>() => typeof(T).ToTopicName();
 
         public virtual INamingStrategy GetNamingStrategy()
@@ -57,7 +58,26 @@ namespace JustSaying
         /// <returns></returns>
         public IHaveFulfilledPublishRequirements WithSnsMessagePublisher<T>() where T : Message
         {
+            return WithSnsMessagePublisher<T>(null);
+        }
+
+        /// <summary>
+        /// Register for publishing messages to SNS
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        public IHaveFulfilledPublishRequirements WithSnsMessagePublisher<T>(Action<SnsWriteConfiguration> configBuilder) where T : Message
+        {
+            return AddSnsMessagePublisher<T>(configBuilder);
+        }
+
+        private IHaveFulfilledPublishRequirements AddSnsMessagePublisher<T>(Action<SnsWriteConfiguration> configBuilder) where T : Message
+        {
             _log.LogInformation("Adding SNS publisher");
+
+            var snsWriteConfig = new SnsWriteConfiguration();
+            configBuilder?.Invoke(snsWriteConfig);
+
             _subscriptionConfig.Topic = GetMessageTypeName<T>();
             var namingStrategy = GetNamingStrategy();
 
@@ -71,12 +91,9 @@ namespace JustSaying
                     topicName,
                     _awsClientFactoryProxy.GetAwsClientFactory().GetSnsClient(RegionEndpoint.GetBySystemName(region)),
                     Bus.SerialisationRegister,
-                    _loggerFactory);
+                    _loggerFactory, snsWriteConfig);
 
-                if (!eventPublisher.Exists())
-                {
-                    eventPublisher.Create();
-                }
+                eventPublisher.Create();
 
                 eventPublisher.EnsurePolicyIsUpdated(Bus.Config.AdditionalSubscriberAccounts);
 
@@ -174,7 +191,7 @@ namespace JustSaying
                 throw new InvalidOperationException("You must register for message publication before publishing a message");
             }
 
-            await Bus.PublishAsync(message);
+            await Bus.PublishAsync(message).ConfigureAwait(false);
         }
 
         /// <summary>
