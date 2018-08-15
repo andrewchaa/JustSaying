@@ -133,7 +133,7 @@ That's it. By calling StartListening() we are telling the stack to begin polling
 
 
 ### 2.(b) Configure Throttling
-JustSaying throttles message handllers, which means JustSaying will limit the maximum number of messages being processed concurrently. The default limit is 8 threads per [processor core](https://msdn.microsoft.com/en-us/library/system.environment.processorcount.aspx), i.e. `Environment.ProcessorCount * 8`.
+JustSaying throttles message handlers, which means JustSaying will limit the maximum number of messages being processed concurrently. The default limit is 8 threads per [processor core](https://msdn.microsoft.com/en-us/library/system.environment.processorcount.aspx), i.e. `Environment.ProcessorCount * 8`.
 We feel that this is a sensible number, but it can be overridden. This is useful for web apps with TCP thread restrictions.
 To override throttling you need to specify optional parameter when setting SqsTopicSubcriber
 
@@ -170,7 +170,7 @@ JustSaying provides you access to the Subscribers and Publishers message types v
 
 JustSaying stack will throw out the following named logs from NLog:
 * "JustSaying"
-        * Information on the setup & your configuration (Info level). This includes all subscriptions, tennants, publication registrations etc.
+        * Information on the setup & your configuration (Info level). This includes all subscriptions, tenants, publication registrations etc.
         * Information on the number of messages handled & heartbeat of queue polling (Trace level). You can use this to confirm you're receiving messages. Beware, it can get big!
 * "EventLog"
         * A full log of all the messages you publish (including the Json serialised version).
@@ -209,11 +209,8 @@ JustSaying.Tools.exe move -from "source_queue_name" -to "destination_queue_name"
 ````
 
 ## Contributing...
-We've been adding things ONLY as they are needed, so please feel free to either bring up suggestions or to submit pull requests with new *GENERIC* functionalities.
 
-Don't bother submitting any breaking changes or anything without unit tests against it. It will be declined.
+Please read the [contributing guide](./.github/CONTRIBUTING.md "Contributing to JustSaying").
 
 ### The End.....
 ...*Happy Messaging!...*
-
-AJ

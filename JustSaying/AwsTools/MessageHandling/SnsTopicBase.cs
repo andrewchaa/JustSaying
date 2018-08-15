@@ -1,4 +1,7 @@
 using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
@@ -13,94 +16,89 @@ namespace JustSaying.AwsTools.MessageHandling
     public abstract class SnsTopicBase : IMessagePublisher
     {
         private readonly IMessageSerialisationRegister _serialisationRegister; // ToDo: Grrr...why is this here even. GET OUT!
+        private readonly IMessageSubjectProvider _messageSubjectProvider;
         private readonly SnsWriteConfiguration _snsWriteConfiguration;
+        public Action<MessageResponse, Message> MessageResponseLogger { get; set; }
         public string Arn { get; protected set; }
         protected IAmazonSimpleNotificationService Client { get; set; }
         private readonly ILogger _eventLog;
         private readonly ILogger _log;
 
-        protected SnsTopicBase(IMessageSerialisationRegister serialisationRegister, ILoggerFactory loggerFactory)
+        protected SnsTopicBase(IMessageSerialisationRegister serialisationRegister, ILoggerFactory loggerFactory, IMessageSubjectProvider messageSubjectProvider)
         {
             _serialisationRegister = serialisationRegister;
+            _messageSubjectProvider = messageSubjectProvider;
             _log = loggerFactory.CreateLogger("JustSaying");
             _eventLog = loggerFactory.CreateLogger("EventLog");
         }
 
-        protected SnsTopicBase(IMessageSerialisationRegister serialisationRegister, ILoggerFactory loggerFactory, SnsWriteConfiguration snsWriteConfiguration)
+        protected SnsTopicBase(IMessageSerialisationRegister serialisationRegister,
+            ILoggerFactory loggerFactory, SnsWriteConfiguration snsWriteConfiguration,
+            IMessageSubjectProvider messageSubjectProvider)
         {
             _serialisationRegister = serialisationRegister;
             _log = loggerFactory.CreateLogger("JustSaying");
             _eventLog = loggerFactory.CreateLogger("EventLog");
             _snsWriteConfiguration = snsWriteConfiguration;
+            _messageSubjectProvider = messageSubjectProvider;
         }
 
-        protected abstract Task<bool> ExistsAsync();
+        public abstract Task<bool> ExistsAsync();
+        
+        public Task PublishAsync(Message message) => PublishAsync(message, CancellationToken.None);
 
-        public bool Exists() => ExistsAsync().GetAwaiter().GetResult();
-
-        public async Task<bool> SubscribeAsync(SqsQueueBase queue)
-        {
-            var subscriptionResponse = await Client.SubscribeAsync(Arn, "sqs", queue.Arn).ConfigureAwait(false);
-
-            if (!string.IsNullOrEmpty(subscriptionResponse?.SubscriptionArn))
-            {
-                return true;
-            }
-
-            _log.LogInformation($"Failed to subscribe Queue to Topic: {queue.Arn}, Topic: {Arn}");
-            return false;
-        }
-
-#if AWS_SDK_HAS_SYNC
-        public void Publish(Message message)
+        public async Task PublishAsync(Message message, CancellationToken cancellationToken)
         {
             var request = BuildPublishRequest(message);
 
             try
             {
-                Client.Publish(request);
+                var response = await Client.PublishAsync(request, cancellationToken).ConfigureAwait(false);
                 _eventLog.LogInformation($"Published message: '{request.Subject}' with content {request.Message}");
+
+                MessageResponseLogger?.Invoke(new MessageResponse
+                {
+                    HttpStatusCode = response?.HttpStatusCode,
+                    MessageId = response?.MessageId
+                }, message);
             }
             catch (Exception ex)
             {
-                if (!ClientExceptionHandler(ex))
-                    throw new PublishException(
-                        $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
-                        ex);
-            }
-        }
-#endif
-
-        public async Task PublishAsync(Message message)
-        {
-            var request = BuildPublishRequest(message);
-
-            try
-            {
-                await Client.PublishAsync(request).ConfigureAwait(false);
-
-                _eventLog.LogInformation($"Published message: '{request.Subject}' with content {request.Message}");
-            }
-            catch (Exception ex)
-            {
-                if (!ClientExceptionHandler(ex))
+                if (!ClientExceptionHandler(ex, message))
                     throw new PublishException(
                         $"Failed to publish message to SNS. TopicArn: {request.TopicArn} Subject: {request.Subject} Message: {request.Message}",
                         ex);
             }
         }
 
-        private bool ClientExceptionHandler(Exception ex) => _snsWriteConfiguration?.HandleException?.Invoke(ex) ?? false;
+        private bool ClientExceptionHandler(Exception ex, Message message) => _snsWriteConfiguration?.HandleException?.Invoke(ex, message) ?? false;
 
         private PublishRequest BuildPublishRequest(Message message)
         {
             var messageToSend = _serialisationRegister.Serialise(message, serializeForSnsPublishing: true);
-            var messageType = message.GetType().Name;
+            var messageType = _messageSubjectProvider.GetSubjectForType(message.GetType());
+
+            var messageAttributeValues = message.MessageAttributes?.ToDictionary(
+                source => source.Key,
+                source =>
+                {
+                    if (source.Value == null)
+                        return null;
+
+                    return new MessageAttributeValue
+                    {
+                        StringValue = source.Value.StringValue,
+                        BinaryValue = source.Value.BinaryValue != null ? new MemoryStream(source.Value.BinaryValue, false) : null,
+                        DataType = source.Value.DataType
+                    };
+                });
+            
             return new PublishRequest
             {
                 TopicArn = Arn,
                 Subject = messageType,
-                Message = messageToSend
+                Message = messageToSend,
+                MessageAttributes = messageAttributeValues
             };
         }
     }

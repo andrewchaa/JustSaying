@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Amazon;
 using Amazon.SQS;
@@ -14,39 +15,30 @@ namespace JustSaying.AwsTools.MessageHandling
     {
         private readonly IAmazonSQS _client;
         private readonly IMessageSerialisationRegister _serialisationRegister;
+        public Action<MessageResponse, Message> MessageResponseLogger { get; set; }
 
-        public SqsPublisher(RegionEndpoint region, string queueName, IAmazonSQS client, int retryCountBeforeSendingToErrorQueue, IMessageSerialisationRegister serialisationRegister, ILoggerFactory loggerFactory)
+        public SqsPublisher(RegionEndpoint region, string queueName, IAmazonSQS client,
+            int retryCountBeforeSendingToErrorQueue, IMessageSerialisationRegister serialisationRegister,
+            ILoggerFactory loggerFactory)
             : base(region, queueName, client, retryCountBeforeSendingToErrorQueue, loggerFactory)
         {
             _client = client;
             _serialisationRegister = serialisationRegister;
         }
 
-#if AWS_SDK_HAS_SYNC
-        public void Publish(Message message)
+        public Task PublishAsync(Message message) => PublishAsync(message, CancellationToken.None);
+
+        public async Task PublishAsync(Message message, CancellationToken cancellationToken)
         {
             var request = BuildSendMessageRequest(message);
-
             try
             {
-                _client.SendMessage(request);
-            }
-            catch (Exception ex)
-            {
-                throw new PublishException(
-                    $"Failed to publish message to SQS. QueueUrl: {request.QueueUrl} MessageBody: {request.MessageBody}",
-                    ex);
-            }
-        }
-#endif
-
-        public async Task PublishAsync(Message message)
-        {
-            var request = BuildSendMessageRequest(message);
-
-            try
-            {
-                await _client.SendMessageAsync(request).ConfigureAwait(false);
+                var response = await _client.SendMessageAsync(request, cancellationToken).ConfigureAwait(false);
+                MessageResponseLogger?.Invoke(new MessageResponse
+                {
+                    HttpStatusCode = response?.HttpStatusCode,
+                    MessageId = response?.MessageId
+                }, message);
             }
             catch (Exception ex)
             {
